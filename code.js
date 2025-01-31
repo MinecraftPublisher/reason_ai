@@ -17,6 +17,7 @@ var get_text = function(e) {
 async function summarize() {
   const req = await request([
     ...messages.map((e) => ({ role: e.role, content: get_text(e.element.innerHTML) })),
+    { role: "system", content: "Last summary: " + current_summary },
     { role: "system", content: SUMMARY_PROMPT }
   ]).then((e) => e.json());
   return req.choices[0].message.content;
@@ -37,7 +38,7 @@ async function ai(input) {
   target.appendChild(messages[index].element);
   if (messages.length % 20 === 19) {
     messages[index].element.innerHTML = "<red>ReasonAI </red>Updating context...";
-    current_summary = await summarize();
+    current_summary += await summarize();
   }
   messages[index].element.innerHTML = "<red>ReasonAI </red>Thinking...";
   const req = await request([
