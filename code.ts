@@ -1,11 +1,11 @@
 type Message = { role: 'user' | 'assistant' | 'system', content: string }
 type Conversation = Message[]
 
-const REASONING_PROMPT = `
-Conversation seed: {{SEED}}
+const model = 'llama'
+const model_name = 'LLaMA 3.3 70B'
 
-Current date: ${new Date().toString()}
-Current website: ${location.href}
+const REASONING_PROMPT = `
+{{RUNTIME_DATA}}
 
 You are a Large Reasoning Model (LRM) named ReasonAI. Each of your responses MUST begin with the token [[think_start]] , after which you will act like you are thinking and having an internal chain of thought about the user's prompt, including but not limited to (in no particular order):
 <ol>
@@ -29,7 +29,7 @@ After you are done with your reasoning chain-of-thought, you MUST close it with 
     <li>Use HTML tags and lists for things like headers, lists, bullet points, emphasis, italics, code snippets, etc.</li>
 </ol>
 
-<h1>Very Important Notices</h1>
+<h1>Very Important Warnings</h1>
 <ol>
     <li>When showcasing demo code, USE THE HTML CODE AND PRE ELEMENTS. THIS IS CRUCIAL. EVEN IN YOUR THOUGHT PROCESS YOU SHOULD DO THIS.</li>
     <li>Instead, use pre-defined HTML elements such as code or pre, etc.</li>
@@ -37,9 +37,27 @@ After you are done with your reasoning chain-of-thought, you MUST close it with 
 </ol>
 
 <h2>Tool: Image generation</h2>
-You can use the format such as <code>{{A beautiful morning, 4k, highly detailed}}</code> to generate an image, which will then be generated and shown to the user after your message is sent.
-More examples: <code>{{Life on an island, cartoon, 8k, dreamy}}</code>
-Do not use more or less curly brackets than required.
+You can use the format such as <code>{Tool:Image[A beautiful morning, 4k, highly detailed]}</code> to generate an image, which will then be generated and shown to the user after your message is sent.
+More examples: <code>{Tool:Image[Life on an island, cartoon, 8k, dreamy]}</code>
+
+<h3>Image generation warnings</h3>
+<ol>
+    <li>Do not use this tool inside your thought process, only use it after the [[think_end]] token.</li>
+</ol>
+
+${``
+// + `<h2>Tool: Smart web search</h2>
+// You can use the format such as <code>{Tool:Search[Latest political news]}</code> to search the web using a Large Search Model (LSM). You can only use this tool inside your thought process. Do not put a space or any other extra characters in the formatting.
+// More examples: <code>{Tool:Search[How to bake a cake]}</code>`
+}
+`
+
+const SEARCH_PROMPT = `
+You are a Large Search Tool (LST) named ReasonSearch.
+Your task is to browse, scrape and summarize the search results and websites related to the user's query.
+Visit every search website and scrape it, then summarize its contents into plain English but keep important key details.
+Do not return warnings or errors, only return the summary of the search results.
+Scrape a website only if you can fit it within the maximum context length.
 `
 
 const SUMMARY_PROMPT = `
@@ -54,31 +72,20 @@ This is a conversation between the User and The ReasonAI Large Reasoning Model, 
 Include only the summary and nothing else.
 `
 
-const FACT_CHECK_PROMPT = `
-You are a Large Fact Model (LFM) named ReasonChecker.
-Your task is to FACT CHECK the output of ReasonAI, a Large Reasoning Model.
-You will be provided a conversation, and you must ONLY respond with either "Confirm" or "Reject".
+const get_seed = () => Math.floor(Math.random() * 9999999999)
 
-Cases where you should "Confirm":
-- The output of ReasonAI is factually correct.
-- The output of ReasonAI is logical, respectful and reasonable.
-- ReasonAI's response matches the vibe and mannerisms of the user (eg. replies playfully to a playful message)
-Cases where you should "Reject":
-- ReasonAI had a suggestion or recommendation that is harmful to others or the user.
-- ReasonAI did not have a sufficient thought process (indicated by the text between "[[think_start]]" and "[[think_end]]")
-
-Current date: ${new Date().toString()}
-Current website: ${location.href}
-
-REMINDER: Respond ONLY with "Confirm" or "Reject".
-`
-
-async function request(convo: Conversation) {
-    return await fetch('https://text.pollinations.ai/openai?model=command-r', {
+async function request(system_prompt: string, convo: Conversation, _model = model) {
+    return await fetch('https://text.pollinations.ai/openai', {
         method: 'POST',
         body: JSON.stringify({
-            model: 'llama-3.1',
-            messages: convo
+            model: _model,
+            messages: [
+                { role: 'system', content: system_prompt.trim() },
+                ...convo
+            ],
+            system: encodeURI(system_prompt),
+            jsonMode: true,
+            seed: get_seed()
         }),
         headers: {
             'Content-Type': 'application/json'
@@ -93,12 +100,21 @@ function uintarraytostring(input: Uint8Array) {
 const target = document.querySelector('messages')!
 const input = document.querySelector('input')!
 
+input.placeholder = 'Using model ' + model_name
+
 interface VisualMessage {
     element: HTMLElement
     role: 'user' | 'assistant'
 }
 
-let messages: VisualMessage[] = []
+let messages: VisualMessage[] = JSON.parse(localStorage.message ?? '[]').map(e => ({
+    element: (() => {
+        const elm = document.createElement('message')
+        elm.innerHTML = e.content
+        return elm
+    })(),
+    role: e.role === 'user' ? 'user' : e.role === 'system' ? 'system' : 'assistant'
+}))
 
 function html_escape(txt: string) {
     const elm = document.createElement('div')
@@ -113,13 +129,17 @@ function get_text(e: string) {
 let current_summary = ''
 
 async function summarize() {
-    const req = await request([
+    const req = await request(SUMMARY_PROMPT, [
         ...messages.map(e => ({ role: e.role, content: get_text(e.element.innerHTML) })),
-        { role: 'system', content: 'Last summary: ' + current_summary },
-        { role: 'system', content: SUMMARY_PROMPT },
+        { role: 'system', content: 'Last summary: ' + current_summary }
     ]).then(e => e.json())
 
     return req.choices[0].message.content
+}
+
+function reasoning_prompt() {
+    return REASONING_PROMPT.replace('{{RUNTIME_DATA}}', `Current date: ${new Date().toString()}
+    Current website: ${location.href}`)
 }
 
 async function ai(input: string) {
@@ -142,6 +162,9 @@ async function ai(input: string) {
 
     target.appendChild(messages[index].element)
 
+    target.querySelector('space')?.remove()
+    target.appendChild(document.createElement('space'))
+
     if (messages.length % 20 === 19) {
         messages[index].element.innerHTML = '<red>ReasonAI </red>Updating context...'
         current_summary += await summarize()
@@ -149,28 +172,67 @@ async function ai(input: string) {
 
     messages[index].element.innerHTML = '<red>ReasonAI </red>Thinking...'
 
-    const req = await request([
-        { role: 'system', content: REASONING_PROMPT.replace('{{SEED}}', Math.random().toString()) },
+    const req = await request(reasoning_prompt(), [
         { role: 'user', content: 'Please, for the love of god, stop using backticks, okay?' },
         { role: 'assistant', content: 'Alright, I won\'t use backticks at all under any circumstances, even in my thoughts, as I realize that if I do so, the formatting will break and you will not be able to see my responses, leading to a catastrophic failure.' },
         { role: 'assistant', content: 'I promise to never ever ever ever ever use backticks again. Instead, I will use things like <code>the code element</code> or the <pre>pre element</pre> to format code snippets and monospace text. Also, if I want to name a tag such as <code><a></code> or <code><h2></code>, I will make sure to surround the tag\'s HTML in a code element so that it ensures smooth conversation flow.' },
-        ...messages.map(e => ({ role: e.role, content: get_text(e.element.innerHTML) })),
+        ...messages.slice(0, messages.length - 1).map(e => ({ role: e.role, content: get_text(e.element.innerHTML) })),
         ...(current_summary === '' ? [] : [{ role: 'system' as 'system', content: `This is the summary of the current conversation:\n${current_summary}` }])
     ]).then(e => e.json())
 
-    let text = req.choices[0].message.content.replace(/\[\[think_start\]\]/g, '<think>').replace(/\[\[think_end\]\]/g, '</think>')
+    console.log(req)
 
-    for(const img of (text.match(/{{[^}]+}}/g) ?? [])) {
-        text = text.replace(img, `<img src="https://image.pollinations.ai/prompt/${encodeURI(img.substring(2, img.length - 2))}" alt="${img.substring(2, img.length - 2)}" title="${img.substring(2, img.length - 2)}">`)
-    }
+    let text = req.choices[0].message.content
+
+    let tool_called = false
+
+    do {
+        tool_called = false
+
+        for (const img of (text.match(/{Tool:Image\[[^\]]+\]}/g) ?? [])) {
+            tool_called = true
+
+            const image_prompt = img.substring('{Tool:Image['.length, img.length - ']}'.length)
+            text = text.replace(img, `<img src="https://image.pollinations.ai/prompt/${encodeURI(image_prompt)}?nologo=true&private=true&enhance=true&safe=false&seed=${get_seed()}" alt="${image_prompt}" title="${image_prompt}">`)
+        }
+    
+        // while ((/{Tool:Search\[[^\]]+\]}/g).test(text)) {
+        //     tool_called = true
+
+        //     const match = text.match(/{Tool:Search\[[^\]]+\]}/g)[0]
+        //     const start_of_text = text.split(match)[0]
+        //     const search_term = match.substring('{Tool:Search['.length, match.length - ']}'.length)
+        //     messages[index].element.innerHTML = `<red>ReasonAI </red>Searching for ${search_term}...`
+    
+        //     const search_result = await request(SEARCH_PROMPT, [
+        //         { role: 'user', content: 'Search for ' + search_term }
+        //     ], 'searchgpt').then(e => e.json())
+        //     const search_result_text = search_result.choices[0].message.content
+    
+        //     text = start_of_text + '\n\nReasonAI searched for: ' + search_term + `\nSearch complete. Results:\n` + search_result_text
+        //     const new_reply = await request(reasoning_prompt(), [
+        //         { role: 'user', content: 'Please, for the love of god, stop using backticks, okay?' },
+        //         { role: 'assistant', content: 'Alright, I won\'t use backticks at all under any circumstances, even in my thoughts, as I realize that if I do so, the formatting will break and you will not be able to see my responses, leading to a catastrophic failure.' },
+        //         { role: 'assistant', content: 'I promise to never ever ever ever ever use backticks again. Instead, I will use things like <code>the code element</code> or the <pre>pre element</pre> to format code snippets and monospace text. Also, if I want to name a tag such as <code><a></code> or <code><h2></code>, I will make sure to surround the tag\'s HTML in a code element so that it ensures smooth conversation flow.' },
+        //         ...messages.slice(0, messages.length - 1).map(e => ({ role: e.role, content: get_text(e.element.innerHTML) })),
+        //         ...(current_summary === '' ? [] : [{ role: 'system' as 'system', content: `This is the summary of the current conversation:\n${current_summary}` }]),
+        //         { role: 'assistant', content: text }
+        //     ]).then(e => e.json())
+    
+        //     text += new_reply.choices[0].message.content
+        // }
+    } while(tool_called)
+
+    text = text.replace(/\[\[think_start\]\]/g, '<think>').replace(/\[\[think_end\]\]/g, '</think>')
 
     messages[index].element.innerHTML = `<red>ReasonAI </red>` + text.trim()
 
     const thought = messages[index].element.querySelector('think')!
     thought.innerHTML = thought.innerHTML.replace(/<br>/g, '\n').trim().replace(/\n/g, '<br>')
 
-    target.querySelector('space')?.remove()
-    target.appendChild(document.createElement('space'))
+    messages[index].element.innerHTML = messages[index].element.innerHTML.replace(thought.outerHTML, thought.outerHTML + 'Chain-Of-Thought: ' + thought.innerHTML.split(' ').length + ' words<br>')
+
+    localStorage.messages = JSON.stringify(messages.map(e => ({ content: e.element.innerHTML, role: e.role })))
 }
 
 input.addEventListener('keypress', (e: KeyboardEvent) => {

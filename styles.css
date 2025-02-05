@@ -39,6 +39,7 @@ input {
     height: var(--height);
     outline: none;
     width: 600px;
+    max-width: 90vw;
     padding-left: 1.5rem;
     border-radius: 5px;
 
@@ -90,5 +91,5 @@ img {
 
 space {
     display: block;
-    height: 150px;
+    height: 100px;
 }
